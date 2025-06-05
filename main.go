@@ -46,22 +46,16 @@ func getEnvWithDefault(key string, defaultValue string) string {
 
 // 从环境变量加载配置，增加可选参数 modelOverride
 func loadConfig(model string) ChatConfig {
-	url := getEnvWithDefault("OPENAI_URL", "http://127.0.0.1:8000/v1/chat/completions")
-	apiKey := getEnvWithDefault("OPENAI_API_KEY", "none")
-	if model == "" {
-		model = getEnvWithDefault("OPENAI_MODEL", "qwen")
-	}
 	temp := getEnvWithDefault("OPENAI_TEMPERATURE", "0.7")
-
 	temperature, err := strconv.ParseFloat(temp, 64)
 	if err != nil {
 		log.Fatalf("无法解析温度参数: %v", err)
 	}
 
 	return ChatConfig{
-		Url:         url,
-		ApiKey:      apiKey,
-		Model:       model,
+		Url:         getEnvWithDefault("OPENAI_URL", "http://127.0.0.1:8000/v1/chat/completions"),
+		ApiKey:      getEnvWithDefault("OPENAI_API_KEY", "none"),
+		Model:       getEnvWithDefault("OPENAI_MODEL", model),
 		Temperature: temperature,
 	}
 }
@@ -168,9 +162,10 @@ func main() {
 	var filePath string
 	flag.StringVar(&filePath, "f", "", "指定要读取的文件路径")
 	var modelName string
-	flag.StringVar(&modelName, "m", "", "指定要使用的模型名称")
+	flag.StringVar(&modelName, "m", "qwen", "指定要使用的模型名称")
 	flag.Parse()
 
+	fmt.Println("* Using model:", modelName)
 	chatConfig := loadConfig(modelName)
 
 	// 如果有额外的参数，则将其作为用户提问并调用聊天接口

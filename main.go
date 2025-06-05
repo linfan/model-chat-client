@@ -45,10 +45,9 @@ func getEnvWithDefault(key string, defaultValue string) string {
 }
 
 // 从环境变量加载配置，增加可选参数 modelOverride
-func loadConfig(modelOverride string) ChatConfig {
+func loadConfig(model string) ChatConfig {
 	url := getEnvWithDefault("OPENAI_URL", "http://127.0.0.1:8000/v1/chat/completions")
 	apiKey := getEnvWithDefault("OPENAI_API_KEY", "none")
-	model := modelOverride
 	if model == "" {
 		model = getEnvWithDefault("OPENAI_MODEL", "qwen")
 	}
@@ -168,14 +167,21 @@ func main() {
 	// 解析命令行参数
 	var filePath string
 	flag.StringVar(&filePath, "f", "", "指定要读取的文件路径")
+	var modelName string
+	flag.StringVar(&modelName, "m", "", "指定要使用的模型名称")
 	flag.Parse()
 
-	defaultModel := ""
+	chatConfig := loadConfig(modelName)
+
+	// 如果有额外的参数，则将其作为用户提问并调用聊天接口
 	if len(flag.Args()) > 0 {
-		defaultModel = flag.Args()[0]
-		println("使用默认模型：", defaultModel)
+		userInput := strings.Join(flag.Args(), " ")
+		messages = append(messages, Message{Role: "user", Content: userInput})
+
+		// 使用用户输入作为第一轮对话的输入
+		firstAnswer := chat(messages, chatConfig)
+		messages = append(messages, Message{Role: "assistant", Content: firstAnswer})
 	}
-	chatConfig := loadConfig(defaultModel)
 
 	// 如果提供了文件路径，则读取文件内容作为初始提问并调用聊天接口
 	if filePath != "" {
@@ -184,7 +190,6 @@ func main() {
 			log.Fatalf("无法读取文件: %v", err)
 		}
 		messages = append(messages, Message{Role: "user", Content: string(fileContent)})
-		fmt.Printf("> %s\n", string(fileContent))
 
 		// 使用文件内容作为第一轮对话的输入
 		firstAnswer := chat(messages, chatConfig)

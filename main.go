@@ -201,6 +201,9 @@ func main() {
 		if input == "exit" {
 			break
 		}
+		if strings.TrimSpace(input) == "" {
+			continue
+		}
 
 		// 添加用户消息到对话历史
 		messages = append(messages, Message{Role: "user", Content: input})

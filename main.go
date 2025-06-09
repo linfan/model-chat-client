@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -85,7 +86,7 @@ func chat(messages []Message, conf ChatConfig) string {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatalf("HTTP请求失败: %v", err)
+		log.Fatalf("\nHTTP请求失败: [%s] %v", reflect.TypeOf(err), err)
 	}
 	defer resp.Body.Close()
 
@@ -103,7 +104,7 @@ func chat(messages []Message, conf ChatConfig) string {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil && err != io.EOF {
-			log.Fatalf("读取SSE流失败: %v", err)
+			log.Fatalf("\n读取SSE流失败: [%s] %v", reflect.TypeOf(err), err)
 		}
 
 		// 提取data字段
@@ -116,7 +117,7 @@ func chat(messages []Message, conf ChatConfig) string {
 			// 解析JSON数据
 			var event map[string]interface{}
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				log.Printf("无法解析SSE事件: %v", err)
+				log.Printf("\n无法解析SSE事件: [%s] %v", reflect.TypeOf(err), err)
 				continue
 			}
 
@@ -154,16 +155,17 @@ func chat(messages []Message, conf ChatConfig) string {
 	return answer
 }
 
+var filePath string
+var modelName string
+var debugMode bool
+
 func main() {
 	// 初始化对话历史
 	var messages []Message
 
 	// 解析命令行参数
-	var filePath string
 	flag.StringVar(&filePath, "f", "", "指定要读取的文件路径")
-	var modelName string
 	flag.StringVar(&modelName, "m", "qwen", "指定要使用的模型名称")
-	var debugMode bool
 	flag.BoolVar(&debugMode, "d", false, "显示调试日志")
 	flag.Parse()
 
@@ -187,7 +189,7 @@ func main() {
 	if filePath != "" {
 		fileContent, err := os.ReadFile(filePath)
 		if err != nil {
-			log.Fatalf("无法读取文件: %v", err)
+			log.Fatalf("\n无法读取文件: %v", err)
 		}
 		if debugMode {
 			fmt.Printf("> %s\n", fileContent)

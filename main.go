@@ -81,6 +81,7 @@ func chat(messages []Message, conf ChatConfig) string {
 		log.Fatalf("无法创建HTTP请求: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", conf.ApiKey))
 

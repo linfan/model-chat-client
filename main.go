@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-// 定义请求体结构
+// ChatRequest 定义请求体结构
 type ChatRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
@@ -23,7 +23,7 @@ type ChatRequest struct {
 	Stream      bool      `json:"stream"`
 }
 
-// 定义配置结构
+// ChatConfig 定义配置结构
 type ChatConfig struct {
 	Url         string
 	ApiKey      string
@@ -31,7 +31,7 @@ type ChatConfig struct {
 	Temperature float64
 }
 
-// 定义消息结构
+// Message 定义消息结构
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -81,6 +81,7 @@ func chat(messages []Message, conf ChatConfig) string {
 		log.Fatalf("无法创建HTTP请求: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", conf.ApiKey))
 
 	client := &http.Client{}
@@ -88,7 +89,9 @@ func chat(messages []Message, conf ChatConfig) string {
 	if err != nil {
 		log.Fatalf("\nHTTP请求失败: [%s] %v", reflect.TypeOf(err), err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(resp.Body)
 
 	// 检查响应状态码
 	if resp.StatusCode != http.StatusOK {

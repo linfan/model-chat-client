@@ -163,6 +163,8 @@ func main() {
 	flag.StringVar(&filePath, "f", "", "指定要读取的文件路径")
 	var modelName string
 	flag.StringVar(&modelName, "m", "qwen", "指定要使用的模型名称")
+	var debugMode bool
+	flag.BoolVar(&debugMode, "d", false, "显示调试日志")
 	flag.Parse()
 
 	fmt.Println("* Using model:", modelName)
@@ -171,6 +173,9 @@ func main() {
 	// 如果有额外的参数，则将其作为用户提问并调用聊天接口
 	if len(flag.Args()) > 0 {
 		userInput := strings.Join(flag.Args(), " ")
+		if debugMode {
+			fmt.Printf("> %s\n", userInput)
+		}
 		messages = append(messages, Message{Role: "user", Content: userInput})
 
 		// 使用用户输入作为第一轮对话的输入
@@ -183,6 +188,9 @@ func main() {
 		fileContent, err := os.ReadFile(filePath)
 		if err != nil {
 			log.Fatalf("无法读取文件: %v", err)
+		}
+		if debugMode {
+			fmt.Printf("> %s\n", fileContent)
 		}
 		messages = append(messages, Message{Role: "user", Content: string(fileContent)})
 

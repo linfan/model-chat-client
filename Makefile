@@ -1,7 +1,13 @@
 build:
-	go build -o dist/openai-client *.go
+	cargo build --release
+	mkdir -p dist
+	cp target/release/openai-client dist/
 
 clean:
+	cargo clean
 	rm -rf dist
 
-.PHONY: build clean
+dev:
+	cargo run
+
+.PHONY: build clean dev

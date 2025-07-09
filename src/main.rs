@@ -7,6 +7,7 @@ use std::env;
 use std::io::{self, Write};
 use tokio::fs;
 use tokio::io::{stdin, AsyncBufReadExt, BufReader as TokioBufReader};
+
 #[derive(Parser)]
 #[command(name = "openai-client")]
 #[command(about = "OpenAI API Chat Client")]
@@ -23,17 +24,13 @@ struct Args {
     #[arg(short = 'd', long = "debug")]
     debug_mode: bool,
 
+    /// 指定图片路径，可以多次传递，允许与文本混合
+    #[arg(short = 'i', long = "image")]
+    image_paths: Vec<String>,
+
     /// 用户输入的问题
     #[arg(trailing_var_arg = true)]
     user_input: Vec<String>,
-}
-
-#[derive(Serialize, Debug)]
-struct ChatRequest {
-    model: String,
-    messages: Vec<Message>,
-    temperature: f64,
-    stream: bool,
 }
 
 #[derive(Clone)]
@@ -44,10 +41,32 @@ struct ChatConfig {
     temperature: f64,
 }
 
+#[derive(Serialize, Debug)]
+struct ChatRequest {
+    model: String,
+    messages: Vec<Message>,
+    temperature: f64,
+    stream: bool,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Message {
     role: String,
-    content: String,
+    content: Vec<ContentItem>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
+enum ContentItem {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ImageUrl {
+    url: String,
 }
 
 #[derive(Deserialize)]
@@ -174,43 +193,49 @@ async fn main() -> Result<()> {
     
     let mut messages: Vec<Message> = Vec::new();
 
-    // 处理命令行参数中的用户输入
-    if !args.user_input.is_empty() {
-        let user_input = args.user_input.join(" ");
-        if args.debug_mode {
-            println!("> {}", user_input);
-        }
-        messages.push(Message {
-            role: "user".to_string(),
-            content: user_input,
-        });
-
-        let first_answer = chat(&messages, &config).await?;
-        messages.push(Message {
-            role: "assistant".to_string(),
-            content: first_answer,
-        });
-    }
+    // 构造 user message 的 content 数组，顺序与参数一致
+    let mut content_items: Vec<ContentItem> = Vec::new();
 
     // 处理文件输入
     if let Some(file_path) = &args.file_path {
         let file_content = fs::read_to_string(file_path)
             .await
             .with_context(|| format!("无法读取文件: {}", file_path))?;
-        
+
         if args.debug_mode {
             println!("> {}", file_content);
         }
-        
+        content_items.push(ContentItem::Text { text: file_content.clone() });
+    }
+
+    // 处理命令行参数中的用户输入
+    if !args.user_input.is_empty() {
+        let user_input = args.user_input.join(" ");
+        if args.debug_mode {
+            println!("> {}", user_input);
+        }
+        content_items.push(ContentItem::Text { text: user_input.clone() });
+    }
+
+    // 处理图片输入
+    for img in &args.image_paths {
+        content_items.push(ContentItem::ImageUrl {
+            image_url: ImageUrl { url: format!("file://{}", img) },
+        });
+    }
+
+    if !content_items.is_empty() {
         messages.push(Message {
             role: "user".to_string(),
-            content: file_content,
+            content: content_items,
         });
+    }
 
+    if !messages.is_empty() {
         let first_answer = chat(&messages, &config).await?;
         messages.push(Message {
             role: "assistant".to_string(),
-            content: first_answer,
+            content: vec![ContentItem::Text { text: first_answer }],
         });
     }
 
@@ -238,13 +263,13 @@ async fn main() -> Result<()> {
 
                 messages.push(Message {
                     role: "user".to_string(),
-                    content: input.to_string(),
+                    content: vec![ContentItem::Text { text: input.to_string() }],
                 });
 
                 let answer = chat(&messages, &config).await?;
                 messages.push(Message {
                     role: "assistant".to_string(),
-                    content: answer,
+                    content: vec![ContentItem::Text { text: answer }],
                 });
             }
             Err(e) => {

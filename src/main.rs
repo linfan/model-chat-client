@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use base64::Engine;
 use clap::Parser;
 use futures_util::stream::StreamExt;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
@@ -219,8 +220,32 @@ async fn main() -> Result<()> {
 
     // 处理图片输入
     for img in &args.image_paths {
+        let image_data = fs::read(img)
+            .await
+            .with_context(|| format!("无法读取图片文件: {}", img))?;
+
+        // 检测文件扩展名以确定MIME类型
+        let path = std::path::Path::new(img);
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("jpeg")
+            .to_lowercase();
+
+        let mime_type = match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
+            "webp" => "image/webp",
+            _ => "image/jpeg", // 默认使用 jpeg
+        };
+
+        let encoded = base64::prelude::BASE64_STANDARD.encode(&image_data);
         content_items.push(ContentItem::ImageUrl {
-            image_url: ImageUrl { url: format!("file://{}", img) },
+            image_url: ImageUrl {
+                url: format!("data:{};base64,{}", mime_type, encoded),
+            },
         });
     }
 

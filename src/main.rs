@@ -147,8 +147,9 @@ async fn chat(messages: &[Message], config: &ChatConfig) -> Result<String> {
                 let data = line[5..].trim();
                 if data == "[DONE]" {
                     if is_in_thinking {
-                        println!("\n------------------ THINKING END ------------------\n");
+                        println!("\n------------------ THINKING END ------------------");
                     }
+                    println!();
                     return Ok(answer);
                 }
 

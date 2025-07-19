@@ -29,6 +29,10 @@ struct Args {
     #[arg(short = 'i', long = "image")]
     image_paths: Vec<String>,
 
+    /// 连接的服务端地址
+    #[arg(short = 's', long = "server", default_value = "127.0.0.1:8000")]
+    server_host: String,
+
     /// 用户输入的问题
     #[arg(trailing_var_arg = true)]
     user_input: Vec<String>,
@@ -90,13 +94,14 @@ fn get_env_with_default(key: &str, default_value: &str) -> String {
     env::var(key).unwrap_or_else(|_| default_value.to_string())
 }
 
-fn load_config(model: &str) -> Result<ChatConfig> {
+fn load_config(model: &str, server_host: &str) -> Result<ChatConfig> {
     let temp_str = get_env_with_default("OPENAI_TEMPERATURE", "0.7");
     let temperature = temp_str.parse::<f64>()
         .with_context(|| format!("无法解析温度参数: {}", temp_str))?;
 
+    let server_url = format!("http://{}/v1/chat/completions", server_host);
     Ok(ChatConfig {
-        url: get_env_with_default("OPENAI_URL", "http://127.0.0.1:8000/v1/chat/completions"),
+        url: get_env_with_default("OPENAI_URL", server_url.as_str()),
         api_key: get_env_with_default("OPENAI_API_KEY", "none"),
         model: get_env_with_default("OPENAI_MODEL", model),
         temperature,
@@ -191,7 +196,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     
     println!("* Using model: {}", args.model_name);
-    let config = load_config(&args.model_name)?;
+    let config = load_config(&args.model_name, &args.server_host)?;
     
     let mut messages: Vec<Message> = Vec::new();
 

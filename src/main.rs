@@ -165,17 +165,21 @@ async fn chat(messages: &[Message], config: &ChatConfig) -> Result<String> {
                                 if let Some(reasoning_content) = &delta.reasoning_content {
                                     if !is_in_thinking {
                                         print!("----------------- THINKING START -----------------\n");
+                                        print!("{}", reasoning_content.trim_start());
                                         is_in_thinking = true;
+                                    } else {
+                                        print!("{}", reasoning_content);
                                     }
-                                    print!("{}", reasoning_content);
                                     io::stdout().flush().unwrap();
                                 }
                                 if let Some(content) = &delta.content {
                                     if is_in_thinking {
                                         print!("\n------------------ THINKING END ------------------\n\n");
+                                        print!("{}", content.trim_start());
                                         is_in_thinking = false;
+                                    } else {
+                                        print!("{}", content);
                                     }
-                                    print!("{}", content);
                                     io::stdout().flush().unwrap();
                                     answer.push_str(content);
                                 }

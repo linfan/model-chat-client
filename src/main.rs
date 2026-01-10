@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::{self, Write};
 use tokio::fs;
-use tokio::io::{stdin, AsyncBufReadExt, BufReader as TokioBufReader};
 
 #[derive(Parser)]
 #[command(name = "openai-client")]
@@ -276,18 +275,13 @@ async fn main() -> Result<()> {
 
     // 交互式对话循环
     println!("开始对话（输入'exit'退出）：");
-    let stdin = stdin();
-    let mut reader = TokioBufReader::new(stdin);
-    let mut line = String::new();
+
+    let mut rl = rustyline::DefaultEditor::new().context("无法初始化输入编辑器")?;
 
     loop {
-        print!("> ");
-        io::stdout().flush().unwrap();
-        line.clear();
-        
-        match reader.read_line(&mut line).await {
-            Ok(0) => break, // EOF
-            Ok(_) => {
+        let res = rl.readline("> ");
+        match res {
+            Ok(line) => {
                 let input = line.trim();
                 if input == "exit" {
                     break;
@@ -295,6 +289,9 @@ async fn main() -> Result<()> {
                 if input.is_empty() {
                     continue;
                 }
+
+                // 添加到历史记录
+                let _ = rl.add_history_entry(&line);
 
                 messages.push(Message {
                     role: "user".to_string(),
@@ -306,6 +303,9 @@ async fn main() -> Result<()> {
                     role: "assistant".to_string(),
                     content: vec![ContentItem::Text { text: answer }],
                 });
+            }
+            Err(rustyline::error::ReadlineError::Interrupted) | Err(rustyline::error::ReadlineError::Eof) => {
+                break;
             }
             Err(e) => {
                 eprintln!("读取输入失败: {}", e);

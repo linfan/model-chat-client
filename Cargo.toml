@@ -16,3 +16,4 @@ clap = { version = "4.0", features = ["derive"] }
 futures-util = "0.3"
 anyhow = "1.0"
 base64 = "0.22"
+rustyline = "15"

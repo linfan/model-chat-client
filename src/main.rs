@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use base64::Engine;
 use clap::Parser;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, KeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::execute;
 use futures_util::stream::StreamExt;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
@@ -91,6 +94,90 @@ struct Delta {
 
 fn get_env_with_default(key: &str, default_value: &str) -> String {
     env::var(key).unwrap_or_else(|_| default_value.to_string())
+}
+
+fn read_multiline_input() -> Result<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut stdout = io::stdout();
+    let mut current_line = String::new();
+    
+    enable_raw_mode().context("无法启用 raw mode")?;
+    
+    // 尝试启用键盘增强模式以支持 Shift+Enter
+    // 只启用 DISAMBIGUATE_ESCAPE_CODES，避免干扰正常字符输入
+    let _ = execute!(
+        stdout,
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        )
+    );
+    
+    print!("> ");
+    stdout.flush()?;
+    
+    loop {
+        if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+            match code {
+                KeyCode::Enter if modifiers.contains(KeyModifiers::SHIFT) => {
+                    // Shift+Enter: 换行
+                    lines.push(current_line.clone());
+                    current_line.clear();
+                    print!("\r\n  ");
+                    stdout.flush()?;
+                }
+                KeyCode::Enter if modifiers.contains(KeyModifiers::ALT) => {
+                    // Alt+Enter (Option+Enter on Mac): 换行 - 更可靠的替代方案
+                    lines.push(current_line.clone());
+                    current_line.clear();
+                    print!("\r\n  ");
+                    stdout.flush()?;
+                }
+                KeyCode::Enter => {
+                    // 单独 Enter: 发送消息
+                    lines.push(current_line.clone());
+                    print!("\r\n");  // 使用 \r\n 确保光标回到行首
+                    stdout.flush()?;
+                    break;
+                }
+                KeyCode::Char(c) if modifiers.contains(KeyModifiers::CONTROL) && c == 'c' => {
+                    // Ctrl+C: 退出
+                    let _ = execute!(stdout, crossterm::event::PopKeyboardEnhancementFlags);
+                    disable_raw_mode()?;
+                    return Err(anyhow::anyhow!("输入被取消"));
+                }
+                KeyCode::Char(c) => {
+                    current_line.push(c);
+                    print!("{}", c);
+                    stdout.flush()?;
+                }
+                KeyCode::Backspace => {
+                    if !current_line.is_empty() {
+                        current_line.pop();
+                        print!("\x08 \x08");
+                        stdout.flush()?;
+                    } else if !lines.is_empty() {
+                        // 处理删除换行符的情况：回到上一行
+                        current_line = lines.pop().unwrap();
+                        // 重新显示当前行
+                        print!("\r> {}", current_line);
+                        stdout.flush()?;
+                    }
+                }
+                KeyCode::Esc => {
+                    let _ = execute!(stdout, crossterm::event::PopKeyboardEnhancementFlags);
+                    disable_raw_mode()?;
+                    return Err(anyhow::anyhow!("输入被取消"));
+                }
+                _ => {}
+            }
+        }
+    }
+    
+    let _ = execute!(stdout, crossterm::event::PopKeyboardEnhancementFlags);
+    disable_raw_mode().context("无法禁用 raw mode")?;
+    
+    // 将所有行用换行符连接（每行内容已经是纯粹的用户输入，不包含提示符）
+    Ok(lines.join("\n"))
 }
 
 fn load_config(model: &str, server_host: &str) -> Result<ChatConfig> {
@@ -274,44 +361,34 @@ async fn main() -> Result<()> {
     }
 
     // 交互式对话循环
-    println!("开始对话（输入'exit'退出）：");
-
-    let mut rl = rustyline::DefaultEditor::new().context("无法初始化输入编辑器")?;
+    println!("开始对话（输入'exit'退出）");
+    println!("提示：按 Option+Enter (Alt+Enter) 换行，Enter 发送消息");
+    println!("      在支持键盘增强的终端（iTerm2, WezTerm）中也可使用 Shift+Enter");
+    println!();
 
     loop {
-        let res = rl.readline("> ");
-        match res {
-            Ok(line) => {
-                let input = line.trim();
-                if input == "exit" {
-                    break;
-                }
-                if input.is_empty() {
-                    continue;
-                }
+        let input = match read_multiline_input() {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => break,
+        };
 
-                // 添加到历史记录
-                let _ = rl.add_history_entry(&line);
-
-                messages.push(Message {
-                    role: "user".to_string(),
-                    content: vec![ContentItem::Text { text: input.to_string() }],
-                });
-
-                let answer = chat(&messages, &config).await?;
-                messages.push(Message {
-                    role: "assistant".to_string(),
-                    content: vec![ContentItem::Text { text: answer }],
-                });
-            }
-            Err(rustyline::error::ReadlineError::Interrupted) | Err(rustyline::error::ReadlineError::Eof) => {
-                break;
-            }
-            Err(e) => {
-                eprintln!("读取输入失败: {}", e);
-                break;
-            }
+        if input == "exit" {
+            break;
         }
+        if input.is_empty() {
+            continue;
+        }
+
+        messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::Text { text: input }],
+        });
+
+        let answer = chat(&messages, &config).await?;
+        messages.push(Message {
+            role: "assistant".to_string(),
+            content: vec![ContentItem::Text { text: answer }],
+        });
     }
 
     Ok(())

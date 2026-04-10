@@ -9,6 +9,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
 use tokio::fs;
 use unicode_width::UnicodeWidthChar;
 
@@ -126,6 +127,11 @@ fn read_multiline_input() -> Result<String> {
     let mut current_line = String::new();
     // Cursor position as a char-index within `current_line`
     let mut cursor_char_pos: usize = 0;
+    // Paste detection: record the time of the last key event.
+    // Initialised far in the past so the very first Enter always counts as a real send.
+    let mut last_key_time: Instant = Instant::now() - Duration::from_secs(10);
+    // An Enter pressed less than this after the previous key is treated as part of a paste.
+    const PASTE_IDLE_THRESHOLD: Duration = Duration::from_millis(100);
     
     enable_raw_mode().context("无法启用 raw mode")?;
     
@@ -143,6 +149,11 @@ fn read_multiline_input() -> Result<String> {
     
     loop {
         if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+            // Timestamp this key event for paste detection
+            let now = Instant::now();
+            let time_since_last = now.duration_since(last_key_time);
+            last_key_time = now;
+
             // Determine the prompt for the current terminal line
             let prompt = if lines.is_empty() { "> " } else { "  " };
 
@@ -164,11 +175,23 @@ fn read_multiline_input() -> Result<String> {
                     stdout.flush()?;
                 }
                 KeyCode::Enter => {
-                    // 单独 Enter: 发送消息
-                    lines.push(current_line.clone());
-                    print!("\r\n");  // 使用 \r\n 确保光标回到行首
-                    stdout.flush()?;
-                    break;
+                    // If the previous key arrived very recently (< 100 ms), this Enter
+                    // is almost certainly part of a paste — treat it as a newline.
+                    // Only a "slow" Enter (idle >= 100 ms) actually sends the message.
+                    if time_since_last < PASTE_IDLE_THRESHOLD {
+                        // Paste newline: same as Shift+Enter
+                        lines.push(current_line.clone());
+                        current_line.clear();
+                        cursor_char_pos = 0;
+                        print!("\r\n  ");
+                        stdout.flush()?;
+                    } else {
+                        // Real Enter: send message
+                        lines.push(current_line.clone());
+                        print!("\r\n");  // 使用 \r\n 确保光标回到行首
+                        stdout.flush()?;
+                        break;
+                    }
                 }
                 KeyCode::Char(c) if modifiers.contains(KeyModifiers::CONTROL) && c == 'c' => {
                     // Ctrl+C: 退出

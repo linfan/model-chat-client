@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::{self, Write};
 use tokio::fs;
+use unicode_width::UnicodeWidthChar;
 
 #[derive(Parser)]
 #[command(name = "openai-client")]
@@ -96,10 +97,35 @@ fn get_env_with_default(key: &str, default_value: &str) -> String {
     env::var(key).unwrap_or_else(|_| default_value.to_string())
 }
 
+/// Redraw the current input line in place, positioning the terminal cursor at
+/// `cursor_char_pos` (a char-index into `line`).
+/// `prompt` must be ASCII so its byte-len == display-width.
+fn redraw_current_line(prompt: &str, line: &str, cursor_char_pos: usize) -> io::Result<()> {
+    // Go to start of the terminal line
+    print!("\r");
+    // Prompt
+    print!("{}", prompt);
+    // Full line content
+    print!("{}", line);
+    // Erase to end of line (clears any leftover characters after a deletion)
+    print!("\x1b[K");
+    // Move the cursor back to the right position
+    let after_width: usize = line.chars()
+        .skip(cursor_char_pos)
+        .map(|c| c.width().unwrap_or(1))
+        .sum();
+    if after_width > 0 {
+        print!("\x1b[{}D", after_width);
+    }
+    io::stdout().flush()
+}
+
 fn read_multiline_input() -> Result<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut stdout = io::stdout();
     let mut current_line = String::new();
+    // Cursor position as a char-index within `current_line`
+    let mut cursor_char_pos: usize = 0;
     
     enable_raw_mode().context("无法启用 raw mode")?;
     
@@ -117,11 +143,15 @@ fn read_multiline_input() -> Result<String> {
     
     loop {
         if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+            // Determine the prompt for the current terminal line
+            let prompt = if lines.is_empty() { "> " } else { "  " };
+
             match code {
                 KeyCode::Enter if modifiers.contains(KeyModifiers::SHIFT) => {
                     // Shift+Enter: 换行
                     lines.push(current_line.clone());
                     current_line.clear();
+                    cursor_char_pos = 0;
                     print!("\r\n  ");
                     stdout.flush()?;
                 }
@@ -129,6 +159,7 @@ fn read_multiline_input() -> Result<String> {
                     // Alt+Enter (Option+Enter on Mac): 换行 - 更可靠的替代方案
                     lines.push(current_line.clone());
                     current_line.clear();
+                    cursor_char_pos = 0;
                     print!("\r\n  ");
                     stdout.flush()?;
                 }
@@ -146,20 +177,58 @@ fn read_multiline_input() -> Result<String> {
                     return Err(anyhow::anyhow!("输入被取消"));
                 }
                 KeyCode::Char(c) => {
-                    current_line.push(c);
-                    print!("{}", c);
-                    stdout.flush()?;
+                    // Insert character at cursor position
+                    let chars: Vec<char> = current_line.chars().collect();
+                    current_line = chars[..cursor_char_pos]
+                        .iter()
+                        .chain(std::iter::once(&c))
+                        .chain(chars[cursor_char_pos..].iter())
+                        .collect();
+                    cursor_char_pos += 1;
+                    redraw_current_line(prompt, &current_line, cursor_char_pos)
+                        .context("重绘输入行失败")?;
                 }
                 KeyCode::Backspace => {
-                    if !current_line.is_empty() {
-                        current_line.pop();
-                        print!("\x08 \x08");
-                        stdout.flush()?;
+                    if cursor_char_pos > 0 {
+                        // Remove the char just before the cursor
+                        let chars: Vec<char> = current_line.chars().collect();
+                        cursor_char_pos -= 1;
+                        current_line = chars[..cursor_char_pos]
+                            .iter()
+                            .chain(chars[cursor_char_pos + 1..].iter())
+                            .collect();
+                        redraw_current_line(prompt, &current_line, cursor_char_pos)
+                            .context("重绘输入行失败")?;
                     } else if !lines.is_empty() {
-                        // 处理删除换行符的情况：回到上一行
-                        current_line = lines.pop().unwrap();
-                        // 重新显示当前行
-                        print!("\r> {}", current_line);
+                        // 合并到上一行
+                        let prev_line = lines.pop().unwrap();
+                        let prev_prompt = if lines.is_empty() { "> " } else { "  " };
+                        let merged = prev_line + &current_line;
+                        cursor_char_pos = merged.chars().count() - current_line.chars().count();
+                        current_line = merged;
+                        // 向上移动一个终端行后重绘
+                        print!("\x1b[A");
+                        redraw_current_line(prev_prompt, &current_line, cursor_char_pos)
+                            .context("重绘输入行失败")?;
+                    }
+                }
+                KeyCode::Left => {
+                    if cursor_char_pos > 0 {
+                        cursor_char_pos -= 1;
+                        // Move terminal cursor left by the width of the character we just passed
+                        let chars: Vec<char> = current_line.chars().collect();
+                        let w = chars[cursor_char_pos].width().unwrap_or(1);
+                        print!("\x1b[{}D", w);
+                        stdout.flush()?;
+                    }
+                }
+                KeyCode::Right => {
+                    let chars: Vec<char> = current_line.chars().collect();
+                    if cursor_char_pos < chars.len() {
+                        let w = chars[cursor_char_pos].width().unwrap_or(1);
+                        cursor_char_pos += 1;
+                        // Move terminal cursor right by the width of the character we just passed
+                        print!("\x1b[{}C", w);
                         stdout.flush()?;
                     }
                 }

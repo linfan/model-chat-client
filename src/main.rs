@@ -199,6 +199,33 @@ fn read_multiline_input() -> Result<String> {
                     disable_raw_mode()?;
                     return Err(anyhow::anyhow!("输入被取消"));
                 }
+                KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl+U: 删除光标前的所有内容
+                    let chars: Vec<char> = current_line.chars().collect();
+                    current_line = chars[cursor_char_pos..].iter().collect();
+                    cursor_char_pos = 0;
+                    redraw_current_line(prompt, &current_line, cursor_char_pos)
+                        .context("重绘输入行失败")?;
+                }
+                KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl+K: 删除光标后的所有内容
+                    let chars: Vec<char> = current_line.chars().collect();
+                    current_line = chars[..cursor_char_pos].iter().collect();
+                    redraw_current_line(prompt, &current_line, cursor_char_pos)
+                        .context("重绘输入行失败")?;
+                }
+                KeyCode::Char('a') if modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl+A: 移动光标到行首
+                    cursor_char_pos = 0;
+                    redraw_current_line(prompt, &current_line, cursor_char_pos)
+                        .context("重绘输入行失败")?;
+                }
+                KeyCode::Char('e') if modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl+E: 移动光标到行尾
+                    cursor_char_pos = current_line.chars().count();
+                    redraw_current_line(prompt, &current_line, cursor_char_pos)
+                        .context("重绘输入行失败")?;
+                }
                 KeyCode::Char(c) => {
                     // Insert character at cursor position
                     let chars: Vec<char> = current_line.chars().collect();

@@ -368,25 +368,29 @@ async fn chat(messages: &[Message], config: &ChatConfig) -> Result<String> {
                         if let Some(choice) = choices.first() {
                             if let Some(delta) = &choice.delta {
                                 if let Some(reasoning_content) = &delta.reasoning_content {
-                                    if !is_in_thinking {
-                                        print!("----------------- THINKING START -----------------\n");
-                                        print!("{}", reasoning_content.trim_start());
-                                        is_in_thinking = true;
-                                    } else {
-                                        print!("{}", reasoning_content);
+                                    if !reasoning_content.is_empty() {
+                                        if !is_in_thinking {
+                                            print!("----------------- THINKING START -----------------\n");
+                                            print!("{}", reasoning_content.trim_start());
+                                            is_in_thinking = true;
+                                        } else {
+                                            print!("{}", reasoning_content);
+                                        }
+                                        io::stdout().flush().unwrap();
                                     }
-                                    io::stdout().flush().unwrap();
                                 }
                                 if let Some(content) = &delta.content {
-                                    if is_in_thinking {
-                                        print!("\n------------------ THINKING END ------------------\n\n");
-                                        print!("{}", content.trim_start());
-                                        is_in_thinking = false;
-                                    } else {
-                                        print!("{}", content);
+                                    if !content.is_empty() {
+                                        if is_in_thinking {
+                                            print!("\n------------------ THINKING END ------------------\n\n");
+                                            print!("{}", content.trim_start());
+                                            is_in_thinking = false;
+                                        } else {
+                                            print!("{}", content);
+                                        }
+                                        io::stdout().flush().unwrap();
+                                        answer.push_str(content);
                                     }
-                                    io::stdout().flush().unwrap();
-                                    answer.push_str(content);
                                 }
                             }
                         }

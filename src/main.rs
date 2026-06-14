@@ -12,6 +12,7 @@ use std::io::{self, Write};
 use std::time::{Duration, Instant};
 use tokio::fs;
 use unicode_width::UnicodeWidthChar;
+use uuid::Uuid;
 
 #[derive(Parser)]
 #[command(name = "openai-client")]
@@ -313,9 +314,9 @@ fn load_config(model: &str, server_host: &str) -> Result<ChatConfig> {
     })
 }
 
-async fn chat(messages: &[Message], config: &ChatConfig) -> Result<String> {
+async fn chat(messages: &[Message], config: &ChatConfig, session_id: &str) -> Result<String> {
     let client = reqwest::Client::new();
-    
+
     let request_body = ChatRequest {
         model: config.model.clone(),
         messages: messages.to_vec(),
@@ -329,6 +330,7 @@ async fn chat(messages: &[Message], config: &ChatConfig) -> Result<String> {
         .header("Accept-Encoding", "identity")
         .header(ACCEPT, "text/event-stream")
         .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+        .header("X-Session-Id", session_id)
         .json(&request_body)
         .send()
         .await
@@ -407,7 +409,8 @@ async fn chat(messages: &[Message], config: &ChatConfig) -> Result<String> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    
+    let session_id = Uuid::new_v4().to_string();
+
     println!("* Using model: {}", args.model_name);
     let config = load_config(&args.model_name, &args.server_host)?;
     
@@ -476,7 +479,7 @@ async fn main() -> Result<()> {
     }
 
     if !messages.is_empty() {
-        let first_answer = chat(&messages, &config).await?;
+        let first_answer = chat(&messages, &config, &session_id).await?;
         messages.push(Message {
             role: "assistant".to_string(),
             content: vec![ContentItem::Text { text: first_answer }],
@@ -507,7 +510,7 @@ async fn main() -> Result<()> {
             content: vec![ContentItem::Text { text: input }],
         });
 
-        let answer = chat(&messages, &config).await?;
+        let answer = chat(&messages, &config, &session_id).await?;
         messages.push(Message {
             role: "assistant".to_string(),
             content: vec![ContentItem::Text { text: answer }],

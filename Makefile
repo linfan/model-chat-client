@@ -1,7 +1,7 @@
 build:
 	cargo build --release
 	mkdir -p dist
-	cp target/release/openai-client dist/
+	cp target/release/chat-client dist/
 
 clean:
 	cargo clean

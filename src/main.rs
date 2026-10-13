@@ -15,8 +15,8 @@ use unicode_width::UnicodeWidthChar;
 use uuid::Uuid;
 
 #[derive(Parser)]
-#[command(name = "openai-client")]
-#[command(about = "OpenAI API Chat Client")]
+#[command(name = "chat-client")]
+#[command(about = "Model Chat Client")]
 struct Args {
     /// 指定要读取的文件路径
     #[arg(short = 'f', long = "file")]

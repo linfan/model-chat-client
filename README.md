@@ -1,10 +1,10 @@
-# OpenAI API Chat Client (Rust)
+# Model Chat Client
 
-A Rust-based command-line client for interacting with OpenAI API.
+A Rust-based command-line client for interacting with OpenAI-compatible APIs.
 
 ## Features
 
-- Interactive chat with OpenAI API
+- Interactive chat with OpenAI-compatible APIs
 - Support for streaming responses with Server-Sent Events (SSE)
 - File input support for batch processing
 - Command-line arguments for quick queries
@@ -36,19 +36,19 @@ Set the following environment variables:
 
 ```bash
 # Interactive mode
-./dist/openai-client
+./dist/chat-client
 
 # Quick query
-./dist/openai-client "What is Rust programming language?"
+./dist/chat-client "What is Rust programming language?"
 
 # With specific model
-./dist/openai-client -m gpt-4 "Explain async programming"
+./dist/chat-client -m gpt-4 "Explain async programming"
 
 # Read from file
-./dist/openai-client -f input.txt
+./dist/chat-client -f input.txt
 
 # Debug mode
-./dist/openai-client -d "Debug this code"
+./dist/chat-client -d "Debug this code"
 
 # Development mode (using cargo)
 make dev

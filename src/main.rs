@@ -99,35 +99,132 @@ fn get_env_with_default(key: &str, default_value: &str) -> String {
     env::var(key).unwrap_or_else(|_| default_value.to_string())
 }
 
+fn char_width(c: char) -> usize {
+    c.width().unwrap_or(1)
+}
+
+/// Advance through one terminal line, wrapping when a character does not fit.
+/// `col == width` means the terminal is in its "wrap pending" state (the next
+/// printable character moves to the following row).
+fn advance_cursor(row: &mut usize, col: &mut usize, width: usize, w: usize) {
+    if w == 0 {
+        return;
+    }
+    if *col + w > width {
+        *row += 1;
+        *col = 0;
+    }
+    *col += w;
+}
+
+fn rendered_rows(prompt: &str, line: &str, width: usize) -> usize {
+    let mut row = 0;
+    let mut col = 0;
+    for c in prompt.chars().chain(line.chars()) {
+        advance_cursor(&mut row, &mut col, width, char_width(c));
+    }
+    row + 1
+}
+
+struct LineRender {
+    /// Row of the cursor relative to the first row of this line.
+    cursor_row: usize,
+    /// Number of terminal rows occupied by prompt + line.
+    total_rows: usize,
+}
+
 /// Redraw the current input line in place, positioning the terminal cursor at
 /// `cursor_char_pos` (a char-index into `line`).
-/// `prompt` must be ASCII so its byte-len == display-width.
-fn redraw_current_line(prompt: &str, line: &str, cursor_char_pos: usize) -> io::Result<()> {
-    // Go to start of the terminal line
-    print!("\r");
-    // Prompt
-    print!("{}", prompt);
-    // Full line content
-    print!("{}", line);
-    // Erase to end of line (clears any leftover characters after a deletion)
-    print!("\x1b[K");
-    // Move the cursor back to the right position
-    let after_width: usize = line.chars()
-        .skip(cursor_char_pos)
-        .map(|c| c.width().unwrap_or(1))
-        .sum();
-    if after_width > 0 {
-        print!("\x1b[{}D", after_width);
+/// `prev_cursor_row` is the `cursor_row` returned by the previous render; it is
+/// used to move from the cursor back to the first row of the line.
+fn redraw_current_line(
+    prompt: &str,
+    line: &str,
+    cursor_char_pos: usize,
+    prev_cursor_row: usize,
+) -> io::Result<LineRender> {
+    let width = crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80)
+        .max(1);
+
+    // Walk the rendered text up to the cursor to find its terminal position.
+    let mut row = 0;
+    let mut col = 0;
+    for c in prompt.chars() {
+        advance_cursor(&mut row, &mut col, width, char_width(c));
     }
-    io::stdout().flush()
+    for c in line.chars().take(cursor_char_pos) {
+        advance_cursor(&mut row, &mut col, width, char_width(c));
+    }
+    // If the cursor lands right after a full row and text follows, the next
+    // character starts on the following row.
+    let has_text_after = line.chars().skip(cursor_char_pos).any(|c| char_width(c) > 0);
+    let (target_row, target_col) = if has_text_after && col >= width {
+        (row + 1, 0)
+    } else {
+        (row, col.min(width - 1))
+    };
+    let total_rows = rendered_rows(prompt, line, width);
+
+    let mut out = io::stdout();
+    // Back to the first row of the input line, then wipe it and everything below
+    // it so a wrapped line is never appended to its previous rendering.
+    if prev_cursor_row > 0 {
+        write!(out, "\x1b[{}A", prev_cursor_row)?;
+    }
+    write!(out, "\r\x1b[J{}{}", prompt, line)?;
+    // The cursor is now at the last rendered row; walk up to the first one.
+    if total_rows > 1 {
+        write!(out, "\x1b[{}A", total_rows - 1)?;
+    }
+    write!(out, "\r")?;
+    if target_row > 0 {
+        write!(out, "\x1b[{}B", target_row)?;
+    }
+    if target_col > 0 {
+        write!(out, "\x1b[{}C", target_col)?;
+    }
+    out.flush()?;
+
+    Ok(LineRender { cursor_row: target_row, total_rows })
+}
+
+/// Commit `current_line` and start a fresh one below it.
+fn start_new_input_line(
+    lines: &mut Vec<String>,
+    line_rows: &mut Vec<usize>,
+    current_line: &mut String,
+    cursor_char_pos: &mut usize,
+    cursor_row: &mut usize,
+    prompt: &str,
+) -> io::Result<()> {
+    let render = redraw_current_line(
+        prompt,
+        current_line,
+        current_line.chars().count(),
+        *cursor_row,
+    )?;
+    print!("\r\n  ");
+    io::stdout().flush()?;
+    line_rows.push(render.total_rows);
+    lines.push(std::mem::take(current_line));
+    *cursor_char_pos = 0;
+    *cursor_row = 0;
+    Ok(())
 }
 
 fn read_multiline_input() -> Result<String> {
     let mut lines: Vec<String> = Vec::new();
+    // Number of terminal rows occupied by each completed line, used to move the
+    // cursor back up when a line is merged into the previous one.
+    let mut line_rows: Vec<usize> = Vec::new();
     let mut stdout = io::stdout();
     let mut current_line = String::new();
     // Cursor position as a char-index within `current_line`
     let mut cursor_char_pos: usize = 0;
+    // Cursor row within the current line's (possibly wrapped) rendering
+    let mut cursor_row: usize = 0;
     // Paste detection: record the time of the last key event.
     // Initialised far in the past so the very first Enter always counts as a real send.
     let mut last_key_time: Instant = Instant::now() - Duration::from_secs(10);
@@ -161,19 +258,25 @@ fn read_multiline_input() -> Result<String> {
             match code {
                 KeyCode::Enter if modifiers.contains(KeyModifiers::SHIFT) => {
                     // Shift+Enter: 换行
-                    lines.push(current_line.clone());
-                    current_line.clear();
-                    cursor_char_pos = 0;
-                    print!("\r\n  ");
-                    stdout.flush()?;
+                    start_new_input_line(
+                        &mut lines,
+                        &mut line_rows,
+                        &mut current_line,
+                        &mut cursor_char_pos,
+                        &mut cursor_row,
+                        prompt,
+                    )?;
                 }
                 KeyCode::Enter if modifiers.contains(KeyModifiers::ALT) => {
                     // Alt+Enter (Option+Enter on Mac): 换行 - 更可靠的替代方案
-                    lines.push(current_line.clone());
-                    current_line.clear();
-                    cursor_char_pos = 0;
-                    print!("\r\n  ");
-                    stdout.flush()?;
+                    start_new_input_line(
+                        &mut lines,
+                        &mut line_rows,
+                        &mut current_line,
+                        &mut cursor_char_pos,
+                        &mut cursor_row,
+                        prompt,
+                    )?;
                 }
                 KeyCode::Enter => {
                     // If the previous key arrived very recently (< 100 ms), this Enter
@@ -181,16 +284,25 @@ fn read_multiline_input() -> Result<String> {
                     // Only a "slow" Enter (idle >= 100 ms) actually sends the message.
                     if time_since_last < PASTE_IDLE_THRESHOLD {
                         // Paste newline: same as Shift+Enter
-                        lines.push(current_line.clone());
-                        current_line.clear();
-                        cursor_char_pos = 0;
-                        print!("\r\n  ");
-                        stdout.flush()?;
+                        start_new_input_line(
+                            &mut lines,
+                            &mut line_rows,
+                            &mut current_line,
+                            &mut cursor_char_pos,
+                            &mut cursor_row,
+                            prompt,
+                        )?;
                     } else {
                         // Real Enter: send message
-                        lines.push(current_line.clone());
+                        redraw_current_line(
+                            prompt,
+                            &current_line,
+                            current_line.chars().count(),
+                            cursor_row,
+                        )?;
                         print!("\r\n");  // 使用 \r\n 确保光标回到行首
                         stdout.flush()?;
+                        lines.push(std::mem::take(&mut current_line));
                         break;
                     }
                 }
@@ -205,27 +317,35 @@ fn read_multiline_input() -> Result<String> {
                     let chars: Vec<char> = current_line.chars().collect();
                     current_line = chars[cursor_char_pos..].iter().collect();
                     cursor_char_pos = 0;
-                    redraw_current_line(prompt, &current_line, cursor_char_pos)
-                        .context("重绘输入行失败")?;
+                    let render =
+                        redraw_current_line(prompt, &current_line, cursor_char_pos, cursor_row)
+                            .context("重绘输入行失败")?;
+                    cursor_row = render.cursor_row;
                 }
                 KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => {
                     // Ctrl+K: 删除光标后的所有内容
                     let chars: Vec<char> = current_line.chars().collect();
                     current_line = chars[..cursor_char_pos].iter().collect();
-                    redraw_current_line(prompt, &current_line, cursor_char_pos)
-                        .context("重绘输入行失败")?;
+                    let render =
+                        redraw_current_line(prompt, &current_line, cursor_char_pos, cursor_row)
+                            .context("重绘输入行失败")?;
+                    cursor_row = render.cursor_row;
                 }
                 KeyCode::Char('a') if modifiers.contains(KeyModifiers::CONTROL) => {
                     // Ctrl+A: 移动光标到行首
                     cursor_char_pos = 0;
-                    redraw_current_line(prompt, &current_line, cursor_char_pos)
-                        .context("重绘输入行失败")?;
+                    let render =
+                        redraw_current_line(prompt, &current_line, cursor_char_pos, cursor_row)
+                            .context("重绘输入行失败")?;
+                    cursor_row = render.cursor_row;
                 }
                 KeyCode::Char('e') if modifiers.contains(KeyModifiers::CONTROL) => {
                     // Ctrl+E: 移动光标到行尾
                     cursor_char_pos = current_line.chars().count();
-                    redraw_current_line(prompt, &current_line, cursor_char_pos)
-                        .context("重绘输入行失败")?;
+                    let render =
+                        redraw_current_line(prompt, &current_line, cursor_char_pos, cursor_row)
+                            .context("重绘输入行失败")?;
+                    cursor_row = render.cursor_row;
                 }
                 KeyCode::Char(c) => {
                     // Insert character at cursor position
@@ -236,8 +356,10 @@ fn read_multiline_input() -> Result<String> {
                         .chain(chars[cursor_char_pos..].iter())
                         .collect();
                     cursor_char_pos += 1;
-                    redraw_current_line(prompt, &current_line, cursor_char_pos)
-                        .context("重绘输入行失败")?;
+                    let render =
+                        redraw_current_line(prompt, &current_line, cursor_char_pos, cursor_row)
+                            .context("重绘输入行失败")?;
+                    cursor_row = render.cursor_row;
                 }
                 KeyCode::Backspace => {
                     if cursor_char_pos > 0 {
@@ -248,39 +370,47 @@ fn read_multiline_input() -> Result<String> {
                             .iter()
                             .chain(chars[cursor_char_pos + 1..].iter())
                             .collect();
-                        redraw_current_line(prompt, &current_line, cursor_char_pos)
-                            .context("重绘输入行失败")?;
-                    } else if !lines.is_empty() {
+                        let render =
+                            redraw_current_line(prompt, &current_line, cursor_char_pos, cursor_row)
+                                .context("重绘输入行失败")?;
+                        cursor_row = render.cursor_row;
+                    } else if let Some(prev_line) = lines.pop() {
                         // 合并到上一行
-                        let prev_line = lines.pop().unwrap();
+                        let prev_rows = line_rows.pop().unwrap_or(1);
                         let prev_prompt = if lines.is_empty() { "> " } else { "  " };
+                        let prev_len = prev_line.chars().count();
                         let merged = prev_line + &current_line;
-                        cursor_char_pos = merged.chars().count() - current_line.chars().count();
+                        cursor_char_pos = prev_len;
                         current_line = merged;
-                        // 向上移动一个终端行后重绘
-                        print!("\x1b[A");
-                        redraw_current_line(prev_prompt, &current_line, cursor_char_pos)
-                            .context("重绘输入行失败")?;
+                        // Move the cursor to the first row of the previous line,
+                        // which sits `prev_rows` above this line's first row.
+                        let up = prev_rows + cursor_row;
+                        if up > 0 {
+                            print!("\x1b[{}A", up);
+                            stdout.flush()?;
+                        }
+                        let render =
+                            redraw_current_line(prev_prompt, &current_line, cursor_char_pos, 0)
+                                .context("重绘输入行失败")?;
+                        cursor_row = render.cursor_row;
                     }
                 }
                 KeyCode::Left => {
                     if cursor_char_pos > 0 {
                         cursor_char_pos -= 1;
-                        // Move terminal cursor left by the width of the character we just passed
-                        let chars: Vec<char> = current_line.chars().collect();
-                        let w = chars[cursor_char_pos].width().unwrap_or(1);
-                        print!("\x1b[{}D", w);
-                        stdout.flush()?;
+                        let render =
+                            redraw_current_line(prompt, &current_line, cursor_char_pos, cursor_row)
+                                .context("重绘输入行失败")?;
+                        cursor_row = render.cursor_row;
                     }
                 }
                 KeyCode::Right => {
-                    let chars: Vec<char> = current_line.chars().collect();
-                    if cursor_char_pos < chars.len() {
-                        let w = chars[cursor_char_pos].width().unwrap_or(1);
+                    if cursor_char_pos < current_line.chars().count() {
                         cursor_char_pos += 1;
-                        // Move terminal cursor right by the width of the character we just passed
-                        print!("\x1b[{}C", w);
-                        stdout.flush()?;
+                        let render =
+                            redraw_current_line(prompt, &current_line, cursor_char_pos, cursor_row)
+                                .context("重绘输入行失败")?;
+                        cursor_row = render.cursor_row;
                     }
                 }
                 KeyCode::Esc => {
